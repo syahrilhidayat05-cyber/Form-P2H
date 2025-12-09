@@ -167,10 +167,12 @@ if st.button("✅ Submit Checklist"):
 
     df = pd.DataFrame(data_rows)
 
-    filename = f"P2H_{unit_rig}_{tanggal}.xlsx"
+    now = datetime.now()
+    filename = f"P2H_{unit_rig}_{now.strftime('%Y%m%d_%H%M%S')}.xlsx"
     filepath = os.path.join(SAVE_FOLDER, filename)
 
     df.to_excel(filepath, index=False)
 
     st.session_state.submitted = True
     st.rerun()
+
