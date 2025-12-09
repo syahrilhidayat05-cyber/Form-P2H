@@ -3,17 +3,28 @@ import pandas as pd
 from datetime import datetime
 import os
 
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from google.oauth2.service_account import Credentials
+
 # =========================
 # CONFIG
 # =========================
 st.set_page_config(page_title="Form P2H Unit", layout="wide")
 
-SAVE_FOLDER = r"\\172.18.0.230\exploration\Hasil P2H"  # folder di server / laptop
-os.makedirs(SAVE_FOLDER, exist_ok=True)
+TEMP_FOLDER = "temp_files"
+os.makedirs(TEMP_FOLDER, exist_ok=True)
 
-# =========================
-# DAFTAR ITEM CHECKLIST
-# =========================
+# folder Google Drive
+DRIVE_FOLDER_ID = "1uENtDsPGpoAKelLL2Gj-0qBE7-zhhUQg"
+
+RIG_LIST = [
+    "CNI-01", "CNI-02", "CNI-03", "CNI-04",
+    "CNI-05", "CNI-06", "CNI-07", "CNI-08",
+    "CNI-09", "CNI-10", "CNI-11", "CNI-12",
+    "CNI-13", "CNI-14", "CNI-15", "CNI-16"
+]
+
 ITEMS = [
     "Oli mesin", "Air Radiator", "Vanbelt", "Tangki solar", "Oli hidraulik",
     "Oil seal Hidraulik", "Baut Skor menara", "Wire line", "Clamp terpasang",
@@ -22,18 +33,33 @@ ITEMS = [
     "Jergen krisbow solar", "APAR"
 ]
 
-
 # =========================
-# DAFTAR RIG
+# GOOGLE DRIVE UPLOAD
 # =========================
-RIG_LIST = [
-    "CNI-01", "CNI-02", "CNI-03", "CNI-04",
-    "CNI-05", "CNI-06", "CNI-07", "CNI-08",
-    "CNI-09", "CNI-10", "CNI-11", "CNI-12",
-    "CNI-13", "CNI-14", "CNI-15", "CNI-16"
-]
+def upload_to_drive(filepath, filename):
+    SCOPES = ['https://www.googleapis.com/auth/drive.file']
+    creds = Credentials.from_service_account_info(
+        st.secrets["gdrive"],
+        scopes=SCOPES
+    )
 
+    service = build('drive', 'v3', credentials=creds)
 
+    file_metadata = {
+        'name': filename,
+        'parents': [DRIVE_FOLDER_ID]
+    }
+
+    media = MediaFileUpload(
+        filepath,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+    service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields='id'
+    ).execute()
 
 # =========================
 # SESSION STATE
@@ -41,48 +67,39 @@ RIG_LIST = [
 if "submitted" not in st.session_state:
     st.session_state.submitted = False
 
-if "form_data" not in st.session_state:
-    st.session_state.form_data = {}
-
-# =========================
-# JIKA SUDAH SUBMIT
-# =========================
 if st.session_state.submitted:
-    st.success("✅ Data berhasil disubmit!")
+    st.success("✅ Data berhasil disimpan ke Google Drive!")
 
     if st.button("➕ Isi Form Baru"):
         st.session_state.submitted = False
-        st.session_state.form_data = {}
         st.rerun()
 
     st.stop()
 
 # =========================
-# FORM UTAMA
+# FORM HEADER
 # =========================
 st.title("Form P2H Unit")
-
-st.subheader("Informasi Unit")
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
     tanggal = st.date_input("Tanggal")
+
 with col2:
-    unit_rig = st.selectbox(
-        "Unit Rig",
-        options=[""] + RIG_LIST
-    )
+    unit_rig = st.selectbox("Unit Rig", options=[""] + RIG_LIST)
+
 with col3:
     geologist = st.text_input("Geologist")
 
-
+# =========================
+# CHECKLIST
+# =========================
 st.subheader("Checklist Kondisi")
 
 results = {}
 error_messages = []
 
-# Header tabel
 h1, h2, h3 = st.columns([2,3,3])
 with h1: st.markdown("**Item**")
 with h2: st.markdown("**Kondisi**")
@@ -115,7 +132,6 @@ for item in ITEMS:
                 label_visibility="collapsed"
             )
 
-    # validasi
     if kondisi in ["Tidak Normal", "Perbaikan"] and not keterangan.strip():
         error_messages.append(f"{item} wajib diisi keterangannya")
 
@@ -126,37 +142,30 @@ for item in ITEMS:
 
     st.divider()
 
-
-
-
 # =========================
 # SUBMIT
 # =========================
-if st.button("✅ Submit Checklist"):
+if st.button("✅ Submit"):
 
-    # Validasi field wajib
-    if not unit_rig.strip():
-        st.error("❌ Unit Rig wajib diisi!")
+    if not unit_rig:
+        st.error("Unit rig wajib dipilih!")
         st.stop()
 
     if not geologist.strip():
-        st.error("❌ Geologist wajib diisi!")
+        st.error("Geologist wajib diisi!")
         st.stop()
 
-    if len(error_messages) > 0:
-        st.error("❌ Masih ada kesalahan berikut:")
-        for msg in error_messages:
-            st.warning(msg)
+    if error_messages:
+        st.error("Masih ada kesalahan:")
+        for e in error_messages:
+            st.warning(e)
         st.stop()
 
-    # =========================
-    # SIMPAN KE EXCEL
-    # =========================
-    data_rows = []
-
+    # Buat DataFrame
+    rows = []
     for item, value in results.items():
-        data_rows.append({
-            "Tanggal": tanggal,
+        rows.append({
+            "Tanggal": tanggal.strftime("%Y-%m-%d"),
             "Unit Rig": unit_rig,
             "Geologist": geologist,
             "Item": item,
@@ -165,14 +174,18 @@ if st.button("✅ Submit Checklist"):
             "Waktu Submit": datetime.now()
         })
 
-    df = pd.DataFrame(data_rows)
+    df = pd.DataFrame(rows)
 
+    # Nama file
     now = datetime.now()
     filename = f"P2H_{unit_rig}_{now.strftime('%Y%m%d_%H%M%S')}.xlsx"
-    filepath = os.path.join(SAVE_FOLDER, filename)
+    filepath = os.path.join(TEMP_FOLDER, filename)
 
+    # Simpan Excel
     df.to_excel(filepath, index=False)
+
+    # Upload ke Google Drive
+    upload_to_drive(filepath, filename)
 
     st.session_state.submitted = True
     st.rerun()
-
