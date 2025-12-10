@@ -17,7 +17,6 @@ def delete_local_file(path):
     if os.path.exists(path):
         os.remove(path)
 
-
 # =========================
 # CONFIG
 # =========================
@@ -26,8 +25,8 @@ st.set_page_config(page_title="Form P2H Unit", layout="wide")
 TEMP_FOLDER = "temp_files"
 os.makedirs(TEMP_FOLDER, exist_ok=True)
 
-# Ganti dengan folder Shared Drive yang sesuai
-DRIVE_FOLDER_ID = "1OkAj7Z2D5IVCB9fHmrNFWllRGl3hcPvq"  
+# Ganti dengan ID folder di Shared Drive Anda
+DRIVE_FOLDER_ID = "ID_FOLDER_SHARED_DRIVE"
 
 RIG_LIST = [
     "CNI-01","CNI-02","CNI-03","CNI-04",
@@ -66,52 +65,52 @@ def save_temp_file(content, filename):
     return filepath
 
 # =========================
-# FIND & DELETE EXISTING EXCEL
+# FIND EXISTING EXCEL (Shared Drive)
 # =========================
 def find_existing_excel(service):
-    results = service.files().list(
-        q="name='DATA_P2H.xlsx' and trashed=false",
-        fields="files(id, name)",
-        corpora="drive",
-        driveId=DRIVE_FOLDER_ID,
-        includeItemsFromAllDrives=True,
-        supportsAllDrives=True
-    ).execute()
-    files = results.get("files", [])
-    return files[0]["id"] if files else None
+    try:
+        query = "name='DATA_P2H.xlsx' and trashed=false"
+        results = service.files().list(
+            q=query,
+            fields="files(id, name)",
+            corpora="drive",
+            driveId=DRIVE_FOLDER_ID,
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True
+        ).execute()
+        files = results.get("files", [])
+        return files[0]["id"] if files else None
+    except HttpError as e:
+        print("Gagal cek file lama:", e)
+        return None
 
 def delete_file_from_drive(service, file_id):
-    service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+    try:
+        service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+    except HttpError as e:
+        print("Gagal hapus file lama:", e)
 
 # =========================
-# GOOGLE DRIVE UPLOAD (Shared Drive)
+# UPLOAD KE SHARED DRIVE
 # =========================
 def upload_to_drive(filepath, filename):
     SCOPES = ['https://www.googleapis.com/auth/drive']
-    creds = Credentials.from_service_account_info(
-        st.secrets["gdrive"], scopes=SCOPES
-    )
+    creds = Credentials.from_service_account_info(st.secrets["gdrive"], scopes=SCOPES)
     service = build('drive', 'v3', credentials=creds)
 
-    # Replace Excel lama jika nama "DATA_P2H.xlsx"
+    # Hapus file lama jika ada
     if filename == "DATA_P2H.xlsx":
-        try:
-            existing_id = find_existing_excel(service)
-            if existing_id:
-                delete_file_from_drive(service, existing_id)
-                st.info(f"File lama DATA_P2H.xlsx dihapus (ID: {existing_id})")
-        except HttpError as e:
-            st.info("File lama tidak ditemukan atau sudah dihapus. Akan dibuat baru.")
-            print("Debug HTTPError:", e)
+        existing_id = find_existing_excel(service)
+        if existing_id:
+            delete_file_from_drive(service, existing_id)
+            st.info(f"File lama DATA_P2H.xlsx dihapus (ID: {existing_id})")
 
     file_metadata = {'name': filename, 'parents': [DRIVE_FOLDER_ID]}
     media = MediaFileUpload(filepath, resumable=False)
-    uploaded = service.files().create(
-        body=file_metadata, media_body=media, fields="id",
-        supportsAllDrives=True
-    ).execute()
 
-    st.info(f"File '{filename}' berhasil di-upload ke Shared Drive!")
+    uploaded = service.files().create(
+        body=file_metadata, media_body=media, fields="id", supportsAllDrives=True
+    ).execute()
     return uploaded.get("id")
 
 # =========================
@@ -186,31 +185,30 @@ st.divider()
 
 for item in ITEMS:
     c1, c2, c3 = st.columns([2,3,3])
-    with c1:
-        st.write(item)
+    with c1: st.write(item)
     with c2:
         kondisi = st.radio("", ["Normal","Tidak Normal"], key=f"{item}_kondisi", horizontal=True)
     with c3:
         keterangan = ""
         if kondisi == "Tidak Normal":
-            keterangan = st.text_input("", key=f"{item}_keterangan",
-                                       placeholder="Isi keterangan", label_visibility="collapsed")
+            keterangan = st.text_input("", key=f"{item}_keterangan", placeholder="Isi keterangan", label_visibility="collapsed")
+
     fotos = []
     if kondisi == "Tidak Normal":
         fotos = st.file_uploader(
             f"Upload Foto – {item} (max 3 foto)",
-            type=["jpg","jpeg","png"],
-            accept_multiple_files=True,
-            key=f"{item}_foto"
+            type=["jpg","jpeg","png"], accept_multiple_files=True, key=f"{item}_foto"
         )
         if len(fotos) == 0:
             error_messages.append(f"{item}: wajib upload minimal 1 foto")
         elif len(fotos) > 3:
             error_messages.append(f"{item}: maksimal 3 foto")
+
     results[item] = {"Kondisi": kondisi, "Keterangan": keterangan}
     photo_results[item] = fotos
     if kondisi == "Tidak Normal" and not keterangan.strip():
         error_messages.append(f"{item} wajib diisi keterangannya")
+
     st.divider()
 
 # =========================
@@ -235,14 +233,13 @@ if st.button("✅ Submit"):
         kondisi = value["Kondisi"]
         keterangan = value["Keterangan"]
         foto_hyperlinks = ""
+
         if kondisi == "Tidak Normal":
             fotos = photo_results.get(item, [])
             saved_paths = save_photos(item, fotos, unit_rig, timestamp_str)
             foto_links = []
             for p in saved_paths:
-                drive_filename = generate_filename(
-                    prefix=unit_rig, custom_text=item.replace(" ", "_"), ext=p.split(".")[-1]
-                )
+                drive_filename = generate_filename(prefix=unit_rig, custom_text=item.replace(" ", "_"), ext=p.split(".")[-1])
                 with open(p, "rb") as f:
                     temp_path = save_temp_file(f.read(), drive_filename)
                 gfile_id = upload_to_drive(temp_path, drive_filename)
@@ -250,6 +247,7 @@ if st.button("✅ Submit"):
                 delete_local_file(p)
                 foto_links.append(f'=HYPERLINK("https://drive.google.com/file/d/{gfile_id}/view","Foto")')
             foto_hyperlinks = "\n".join(foto_links)
+
         new_row = {
             "Tanggal": tanggal.strftime("%Y-%m-%d"),
             "Unit Rig": unit_rig,
@@ -262,7 +260,6 @@ if st.button("✅ Submit"):
         }
         append_to_excel(new_row)
 
-    # Upload Excel ke Shared Drive (replace jika ada)
     with open(EXCEL_FILE, "rb") as f:
         temp_xlsx = save_temp_file(f.read(), EXCEL_FILE)
     upload_to_drive(temp_xlsx, "DATA_P2H.xlsx")
