@@ -73,22 +73,25 @@ def save_temp_file(content, filename):
 
 
 # =========================
-# FIND & DELETE EXISTING EXCEL DI SHARED DRIVE
+# FIND & DELETE EXISTING EXCEL
 # =========================
 def find_existing_excel(service):
     query = f"name='DATA_P2H.xlsx' and '{DRIVE_FOLDER_ID}' in parents and trashed=false"
-    results = service.files().list(
-        q=query,
-        fields="files(id, name)",
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True
-    ).execute()
+    results = service.files().list(q=query, fields="files(id)", supportsAllDrives=True).execute()
     files = results.get("files", [])
     return files[0]["id"] if files else None
 
 
 def delete_file_from_drive(service, file_id):
-    service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+    try:
+        service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+        st.info(f"File lama berhasil dihapus (ID: {file_id})")
+    except HttpError as e:
+        if e.resp.status == 404:
+            # File tidak ditemukan → dianggap sudah dihapus, lanjut saja
+            st.warning(f"File lama tidak ditemukan, lanjut upload baru (ID: {file_id})")
+        else:
+            raise
 
 
 # =========================
@@ -108,7 +111,6 @@ def upload_to_drive(filepath, filename):
             existing_id = find_existing_excel(service)
             if existing_id:
                 delete_file_from_drive(service, existing_id)
-                st.info(f"File lama DATA_P2H.xlsx dihapus (ID: {existing_id})")
         except HttpError as e:
             st.error(f"Gagal cek/hapus file lama: {e}")
             print("HTTPError saat cek/hapus file lama:")
@@ -127,24 +129,13 @@ def upload_to_drive(filepath, filename):
             supportsAllDrives=True
         ).execute()
 
-        # Debug info
-        print(f"[DEBUG] File '{filename}' berhasil di-upload!")
-        print("File ID:", uploaded.get("id"))
-        print("Parents:", uploaded.get("parents"))
-
         st.info(f"File '{filename}' berhasil di-upload ke Shared Drive!")
-        st.info(f"File ID: {uploaded.get('id')}")
-        st.info(f"Parent folder ID: {uploaded.get('parents')}")
-
         return uploaded.get("id")
 
     except HttpError as e:
         st.error("Terjadi error saat upload ke Shared Drive!")
         st.error(f"Status code: {e.resp.status}")
         st.error(f"Detail: {e.content.decode() if isinstance(e.content, bytes) else e.content}")
-        print("==== DEBUG HTTPError ====")
-        print("Status code:", e.resp.status)
-        print("Content:", e.content.decode() if isinstance(e.content, bytes) else e.content)
         raise
 
 
