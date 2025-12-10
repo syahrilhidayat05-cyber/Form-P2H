@@ -8,6 +8,7 @@ import tempfile
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.service_account import Credentials
+from googleapiclient.errors import HttpError
 
 # =========================
 # DELETE LOCAL FILE
@@ -26,7 +27,7 @@ st.set_page_config(page_title="Form P2H Unit", layout="wide")
 TEMP_FOLDER = "temp_files"
 os.makedirs(TEMP_FOLDER, exist_ok=True)
 
-DRIVE_FOLDER_ID = "1uENtDsPGpoAKelLL2Gj-0qBE7-zhhUQg"
+DRIVE_FOLDER_ID = "1OkAj7Z2D5IVCB9fHmrNFWllRGl3hcPvq"  # Shared Drive folder
 
 RIG_LIST = [
     "CNI-01","CNI-02","CNI-03","CNI-04",
@@ -86,24 +87,23 @@ def delete_file_from_drive(service, file_id):
 
 
 # =========================
-# GOOGLE DRIVE UPLOAD
+# GOOGLE DRIVE UPLOAD (Shared Drive)
 # =========================
-from googleapiclient.errors import HttpError
-
 def upload_to_drive(filepath, filename):
-    SCOPES = ['https://www.googleapis.com/auth/drive.file']
+    SCOPES = ['https://www.googleapis.com/auth/drive']
     creds = Credentials.from_service_account_info(
         st.secrets["gdrive"],
         scopes=SCOPES
     )
     service = build('drive', 'v3', credentials=creds)
 
-    # PATCH → Replace Excel lama jika nama "DATA_P2H.xlsx"
+    # Replace Excel lama jika nama "DATA_P2H.xlsx"
     if filename == "DATA_P2H.xlsx":
         try:
             existing_id = find_existing_excel(service)
             if existing_id:
                 delete_file_from_drive(service, existing_id)
+                st.info(f"File lama DATA_P2H.xlsx dihapus (ID: {existing_id})")
         except HttpError as e:
             st.error(f"Gagal cek/hapus file lama: {e}")
             print("HTTPError saat cek/hapus file lama:")
@@ -116,19 +116,28 @@ def upload_to_drive(filepath, filename):
 
     try:
         uploaded = service.files().create(
-            body=file_metadata, media_body=media, fields="id"
+            body=file_metadata, media_body=media, fields="id, parents"
         ).execute()
+
+        # Debug info
+        print(f"[DEBUG] File '{filename}' berhasil di-upload!")
+        print("File ID:", uploaded.get("id"))
+        print("Parents:", uploaded.get("parents"))
+
+        st.info(f"File '{filename}' berhasil di-upload ke Shared Drive!")
+        st.info(f"File ID: {uploaded.get('id')}")
+        st.info(f"Parent folder ID: {uploaded.get('parents')}")
+
         return uploaded.get("id")
 
     except HttpError as e:
-        st.error("Terjadi error saat upload ke Google Drive!")
+        st.error("Terjadi error saat upload ke Shared Drive!")
         st.error(f"Status code: {e.resp.status}")
         st.error(f"Detail: {e.content.decode() if isinstance(e.content, bytes) else e.content}")
         print("==== DEBUG HTTPError ====")
         print("Status code:", e.resp.status)
         print("Content:", e.content.decode() if isinstance(e.content, bytes) else e.content)
         raise
-
 
 
 # =========================
@@ -178,7 +187,7 @@ if "submitted" not in st.session_state:
     st.session_state.submitted = False
 
 if st.session_state.submitted:
-    st.success("✅ Data berhasil disimpan ke Google Drive!")
+    st.success("✅ Data berhasil disimpan ke Shared Drive!")
     if st.button("➕ Isi Form Baru"):
         st.session_state.submitted = False
         st.rerun()
@@ -343,8 +352,6 @@ if st.button("✅ Submit"):
     # hapus temp excel
     delete_local_file(temp_xlsx)
 
-    st.success("Data berhasil disimpan ke DATA_P2H.xlsx")
+    st.success("Data berhasil disimpan ke Shared Drive!")
     st.session_state.submitted = True
     st.rerun()
-
-
