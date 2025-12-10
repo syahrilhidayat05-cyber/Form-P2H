@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import os
-import re
 import tempfile
 import gspread
 from google.oauth2.service_account import Credentials
@@ -15,22 +14,12 @@ from googleapiclient.errors import HttpError
 # =========================
 st.set_page_config(page_title="Form P2H Unit", layout="wide")
 
-# Google Sheet ID
 SHEET_ID = "1e9X42pvEPZP1dTQ-IY4nM3VvYRJDHuuuFoJ1maxfPZs"
-
-# Shared Drive folder untuk foto
 DRIVE_FOLDER_ID = "1OkAj7Z2D5IVCB9fHmrNFWllRGl3hcPvq"
-
 TEMP_FOLDER = "temp_files"
 os.makedirs(TEMP_FOLDER, exist_ok=True)
 
-RIG_LIST = [
-    "CNI-01","CNI-02","CNI-03","CNI-04",
-    "CNI-05","CNI-06","CNI-07","CNI-08",
-    "CNI-09","CNI-10","CNI-11","CNI-12",
-    "CNI-13","CNI-14","CNI-15","CNI-16"
-]
-
+RIG_LIST = [f"CNI-{str(i).zfill(2)}" for i in range(1, 17)]
 ITEMS = [
     "Oli mesin","Air Radiator","Vanbelt","Tangki solar","Oli hidraulik",
     "Oil seal Hidraulik","Baut Skor menara","Wire line","Clamp terpasang",
@@ -52,10 +41,7 @@ creds = Credentials.from_service_account_info(
     scopes=SCOPES
 )
 
-# Google Sheets client
 gc = gspread.authorize(creds)
-
-# Google Drive client
 drive_service = build('drive', 'v3', credentials=creds)
 
 # =========================
@@ -66,7 +52,7 @@ def delete_local_file(path):
         os.remove(path)
 
 # =========================
-# SAVE FOTO KE DRIVE
+# SAVE FOTO KE DRIVE (Shared Drive support)
 # =========================
 def save_photos_to_drive(fotos, unit_rig, item, timestamp_str):
     saved_links = []
@@ -79,7 +65,7 @@ def save_photos_to_drive(fotos, unit_rig, item, timestamp_str):
         with open(temp_path, "wb") as f:
             f.write(foto.getbuffer())
 
-        # Upload ke Drive
+        # Upload ke Shared Drive
         file_metadata = {
             'name': filename,
             'parents': [DRIVE_FOLDER_ID]
@@ -90,7 +76,8 @@ def save_photos_to_drive(fotos, unit_rig, item, timestamp_str):
             file = drive_service.files().create(
                 body=file_metadata,
                 media_body=media,
-                fields="id"
+                fields="id",
+                supportsAllDrives=True
             ).execute()
             file_id = file.get("id")
             link = f'=HYPERLINK("https://drive.google.com/file/d/{file_id}/view","Foto")'
@@ -123,7 +110,7 @@ if st.session_state.submitted:
     st.success("✅ Data berhasil disimpan ke Google Sheet!")
     if st.button("➕ Isi Form Baru"):
         st.session_state.submitted = False
-        st.rerun()
+        st.experimental_rerun()
     st.stop()
 
 # =========================
@@ -140,7 +127,7 @@ with col3:
     geologist = st.text_input("Geologist")
 
 # =========================
-# CHECKLIST
+# CHECKLIST DENGAN ACCORDION
 # =========================
 st.subheader("Checklist Kondisi")
 
@@ -148,54 +135,46 @@ results = {}
 photo_results = {}
 error_messages = []
 
-h1, h2, h3 = st.columns([2,3,3])
-with h1: st.markdown("**Item**")
-with h2: st.markdown("**Kondisi**")
-with h3: st.markdown("**Keterangan**")
-
-st.divider()
-
 for item in ITEMS:
-    c1, c2, c3 = st.columns([2,3,3])
-    with c1:
-        st.write(item)
-    with c2:
-        kondisi = st.radio("", ["Normal","Tidak Normal"],
-                           key=f"{item}_kondisi", horizontal=True)
-    with c3:
+    with st.expander(f"{item}", expanded=False):
+        kondisi = st.radio(
+            "Kondisi", ["Normal","Tidak Normal"],
+            key=f"{item}_kondisi", horizontal=True
+        )
         keterangan = ""
+        fotos = []
+
         if kondisi == "Tidak Normal":
             keterangan = st.text_input(
-                "", key=f"{item}_keterangan",
-                placeholder="Isi keterangan",
-                label_visibility="collapsed"
+                "Keterangan", key=f"{item}_keterangan",
+                placeholder="Isi keterangan"
             )
-    fotos = []
-    if kondisi == "Tidak Normal":
-        fotos = st.file_uploader(
-            f"Upload Foto – {item} (min 1, max 3 foto)",
-            type=["jpg","jpeg","png"],
-            accept_multiple_files=True,
-            key=f"{item}_foto"
-        )
-        if len(fotos) == 0:
-            error_messages.append(f"{item}: wajib upload minimal 1 foto")
-        elif len(fotos) > 3:
-            error_messages.append(f"{item}: maksimal 3 foto")
+            fotos = st.file_uploader(
+                f"Upload Foto – {item} (min 1, max 3 foto)",
+                type=["jpg","jpeg","png"],
+                accept_multiple_files=True,
+                key=f"{item}_foto"
+            )
 
-    results[item] = {"Kondisi": kondisi, "Keterangan": keterangan}
-    photo_results[item] = fotos
+            # Preview foto
+            if fotos:
+                st.image([f.read() for f in fotos], width=200)
 
-    if kondisi == "Tidak Normal" and not keterangan.strip():
-        error_messages.append(f"{item} wajib diisi keterangannya")
+            # Validasi
+            if not keterangan.strip():
+                error_messages.append(f"{item}: keterangan wajib diisi")
+            if not fotos:
+                error_messages.append(f"{item}: wajib upload minimal 1 foto")
+            elif len(fotos) > 3:
+                error_messages.append(f"{item}: maksimal 3 foto")
 
-    st.divider()
+        results[item] = {"Kondisi": kondisi, "Keterangan": keterangan}
+        photo_results[item] = fotos
 
 # =========================
 # SUBMIT
 # =========================
 if st.button("✅ Submit"):
-
     if not unit_rig:
         st.error("Unit rig wajib dipilih!")
         st.stop()
@@ -235,4 +214,4 @@ if st.button("✅ Submit"):
 
     st.success("✅ Semua data berhasil tersimpan di Google Sheet!")
     st.session_state.submitted = True
-    st.rerun()
+    st.experimental_rerun()
