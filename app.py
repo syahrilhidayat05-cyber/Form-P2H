@@ -88,6 +88,8 @@ def delete_file_from_drive(service, file_id):
 # =========================
 # GOOGLE DRIVE UPLOAD
 # =========================
+from googleapiclient.errors import HttpError
+
 def upload_to_drive(filepath, filename):
     SCOPES = ['https://www.googleapis.com/auth/drive.file']
     creds = Credentials.from_service_account_info(
@@ -96,20 +98,17 @@ def upload_to_drive(filepath, filename):
     )
     service = build('drive', 'v3', credentials=creds)
 
-    # PATCH 6.1 → Replace Excel lama jika nama "DATA_P2H.xlsx"
+    # PATCH → Replace Excel lama jika nama "DATA_P2H.xlsx"
     if filename == "DATA_P2H.xlsx":
-        existing_id = find_existing_excel(service)
-        if existing_id:
-            delete_file_from_drive(service, existing_id)
-
-    file_metadata = {'name': filename, 'parents': [DRIVE_FOLDER_ID]}
-    media = MediaFileUpload(filepath, resumable=False)
-
-    uploaded = service.files().create(
-        body=file_metadata, media_body=media, fields="id"
-    ).execute()
-
-    return uploaded.get("id")
+        try:
+            existing_id = find_existing_excel(service)
+            if existing_id:
+                delete_file_from_drive(service, existing_id)
+        except HttpError as e:
+            st.error(f"Gagal cek/hapus file lama: {e}")
+            print("HTTPError saat cek/hapus file lama:")
+            print("Status code:", e.resp.status)
+            print("Content:", e.content.decode() if isinstance(e.content, bytes) else e.content)
 
 
 # =========================
@@ -327,3 +326,4 @@ if st.button("✅ Submit"):
     st.success("Data berhasil disimpan ke DATA_P2H.xlsx")
     st.session_state.submitted = True
     st.rerun()
+
