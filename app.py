@@ -109,6 +109,26 @@ def upload_to_drive(filepath, filename):
             print("HTTPError saat cek/hapus file lama:")
             print("Status code:", e.resp.status)
             print("Content:", e.content.decode() if isinstance(e.content, bytes) else e.content)
+            raise
+
+    file_metadata = {'name': filename, 'parents': [DRIVE_FOLDER_ID]}
+    media = MediaFileUpload(filepath, resumable=False)
+
+    try:
+        uploaded = service.files().create(
+            body=file_metadata, media_body=media, fields="id"
+        ).execute()
+        return uploaded.get("id")
+
+    except HttpError as e:
+        st.error("Terjadi error saat upload ke Google Drive!")
+        st.error(f"Status code: {e.resp.status}")
+        st.error(f"Detail: {e.content.decode() if isinstance(e.content, bytes) else e.content}")
+        print("==== DEBUG HTTPError ====")
+        print("Status code:", e.resp.status)
+        print("Content:", e.content.decode() if isinstance(e.content, bytes) else e.content)
+        raise
+
 
 
 # =========================
@@ -326,4 +346,5 @@ if st.button("✅ Submit"):
     st.success("Data berhasil disimpan ke DATA_P2H.xlsx")
     st.session_state.submitted = True
     st.rerun()
+
 
