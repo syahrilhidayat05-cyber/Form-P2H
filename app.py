@@ -27,7 +27,7 @@ st.set_page_config(page_title="Form P2H Unit", layout="wide")
 TEMP_FOLDER = "temp_files"
 os.makedirs(TEMP_FOLDER, exist_ok=True)
 
-DRIVE_FOLDER_ID = "1OkAj7Z2D5IVCB9fHmrNFWllRGl3hcPvq"  # Shared Drive folder
+DRIVE_FOLDER_ID = "0ACXw55dYg6NkUk9PVA"  # Shared Drive folder
 
 RIG_LIST = [
     "CNI-01","CNI-02","CNI-03","CNI-04",
@@ -355,3 +355,4 @@ if st.button("✅ Submit"):
     st.success("Data berhasil disimpan ke Shared Drive!")
     st.session_state.submitted = True
     st.rerun()
+
