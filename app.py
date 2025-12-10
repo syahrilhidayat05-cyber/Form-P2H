@@ -83,7 +83,7 @@ def save_photos_to_drive(fotos, unit_rig, item, timestamp_str):
             link = f'=HYPERLINK("https://drive.google.com/file/d/{file_id}/view","Foto")'
             saved_links.append(link)
         except HttpError as e:
-            st.error(f"Gagal upload foto {filename}: {e}")
+            st.warning(f"Gagal upload foto {filename}: {e}")
         finally:
             delete_local_file(temp_path)
 
@@ -97,14 +97,16 @@ def append_to_sheet(row):
         sheet = gc.open_by_key(SHEET_ID).sheet1
         sheet.append_row(list(row.values()), value_input_option='USER_ENTERED')
     except Exception as e:
-        st.error(f"Gagal append ke Sheet: {e}")
-        st.stop()
+        st.warning(f"Gagal append ke Sheet untuk item {row['Item']}: {e}")
 
 # =========================
 # SESSION STATE
 # =========================
 if "submitted" not in st.session_state:
     st.session_state.submitted = False
+
+if "photo_results" not in st.session_state:
+    st.session_state.photo_results = {}
 
 if st.session_state.submitted:
     st.success("✅ Data berhasil disimpan ke Google Sheet!")
@@ -132,7 +134,6 @@ with col3:
 st.subheader("Checklist Kondisi")
 
 results = {}
-photo_results = {}
 error_messages = []
 
 for item in ITEMS:
@@ -156,6 +157,13 @@ for item in ITEMS:
                 key=f"{item}_foto"
             )
 
+            # Simpan ke session_state agar tidak hilang
+            if fotos:
+                st.session_state.photo_results[item] = fotos
+
+            # Ambil foto dari session_state jika sudah ada
+            fotos = st.session_state.photo_results.get(item, [])
+
             # Preview foto
             if fotos:
                 st.image([f.read() for f in fotos], width=200)
@@ -169,7 +177,6 @@ for item in ITEMS:
                 error_messages.append(f"{item}: maksimal 3 foto")
 
         results[item] = {"Kondisi": kondisi, "Keterangan": keterangan}
-        photo_results[item] = fotos
 
 # =========================
 # SUBMIT
@@ -196,8 +203,9 @@ if st.button("✅ Submit"):
         foto_hyperlinks = ""
 
         if kondisi == "Tidak Normal":
-            fotos = photo_results.get(item, [])
-            foto_hyperlinks = save_photos_to_drive(fotos, unit_rig, item, timestamp_str)
+            fotos = st.session_state.photo_results.get(item, [])
+            if fotos:
+                foto_hyperlinks = save_photos_to_drive(fotos, unit_rig, item, timestamp_str)
 
         new_row = {
             "Tanggal": tanggal.strftime("%Y-%m-%d"),
