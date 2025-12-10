@@ -18,10 +18,10 @@ TEMP_FOLDER = "temp_files"
 os.makedirs(TEMP_FOLDER, exist_ok=True)
 
 # Google Sheet ID
-SHEET_ID = "PASTE_SHEET_ID_DI_SINI"
+SHEET_ID = "1e9X42pvEPZP1dTQ-IY4nM3VvYRJDHuuuFoJ1maxfPZs"
 
 # Shared Drive folder untuk foto
-DRIVE_FOLDER_ID = "PASTE_SHARED_DRIVE_FOLDER_ID"
+DRIVE_FOLDER_ID = "1OkAj7Z2D5IVCB9fHmrNFWllRGl3hcPvq"
 
 # Unit Rig dan Items
 RIG_LIST = ["CNI-01","CNI-02","CNI-03","CNI-04","CNI-05","CNI-06","CNI-07","CNI-08",
@@ -200,3 +200,4 @@ if st.button("✅ Submit"):
     st.success("✅ Data berhasil disimpan ke Google Sheet!")
     st.session_state.submitted = True
     st.rerun()
+
