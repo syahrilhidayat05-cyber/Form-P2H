@@ -18,6 +18,7 @@ def delete_local_file(path):
     if os.path.exists(path):
         os.remove(path)
 
+
 # =========================
 # CONFIG
 # =========================
@@ -26,7 +27,7 @@ st.set_page_config(page_title="Form P2H Unit", layout="wide")
 TEMP_FOLDER = "temp_files"
 os.makedirs(TEMP_FOLDER, exist_ok=True)
 
-DRIVE_FOLDER_ID = "1OkAj7Z2D5IVCB9fHmrNFWllRGl3hcPvq"  # Folder ID di Shared Drive
+DRIVE_FOLDER_ID = "1OkAj7Z2D5IVCB9fHmrNFWllRGl3hcPvq"  # Shared Drive folder
 
 RIG_LIST = [
     "CNI-01","CNI-02","CNI-03","CNI-04",
@@ -68,26 +69,25 @@ def save_temp_file(content, filename):
 # FIND & DELETE EXISTING EXCEL
 # =========================
 def find_existing_excel(service):
-    try:
-        query = f"'{DRIVE_FOLDER_ID}' in parents and name='DATA_P2H.xlsx' and trashed=false"
-        results = service.files().list(
-            q=query,
-            fields="files(id, name)",
-            includeItemsFromAllDrives=True,
-            supportsAllDrives=True
-        ).execute()
-        files = results.get("files", [])
-        return files[0]["id"] if files else None
-    except HttpError as e:
-        st.warning(f"Gagal cek file lama: {e}")
-        return None
+    query = f"name='DATA_P2H.xlsx' and '{DRIVE_FOLDER_ID}' in parents and trashed=false"
+    results = service.files().list(
+        q=query,
+        fields="files(id, name)",
+        includeItemsFromAllDrives=True,
+        supportsAllDrives=True
+    ).execute()
+    files = results.get("files", [])
+    return files[0]["id"] if files else None
 
 def delete_file_from_drive(service, file_id):
     try:
         service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
         st.info(f"File lama dihapus (ID: {file_id})")
     except HttpError as e:
-        st.warning(f"Gagal hapus file lama (mungkin sudah dihapus): {e}")
+        if e.resp.status == 404:
+            st.warning(f"Gagal hapus file lama (mungkin sudah dihapus): {file_id}")
+        else:
+            raise
 
 # =========================
 # GOOGLE DRIVE UPLOAD (Shared Drive)
@@ -108,7 +108,9 @@ def upload_to_drive(filepath, filename):
                 delete_file_from_drive(service, existing_id)
         except HttpError as e:
             st.error(f"Gagal cek/hapus file lama: {e}")
-            raise
+            print("HTTPError saat cek/hapus file lama:")
+            print("Status code:", e.resp.status)
+            print("Content:", e.content.decode() if isinstance(e.content, bytes) else e.content)
 
     file_metadata = {'name': filename, 'parents': [DRIVE_FOLDER_ID]}
     media = MediaFileUpload(filepath, resumable=False)
@@ -118,10 +120,8 @@ def upload_to_drive(filepath, filename):
             body=file_metadata, media_body=media, fields="id, parents",
             supportsAllDrives=True
         ).execute()
-
-        st.info(f"File '{filename}' berhasil di-upload ke Shared Drive! (ID: {uploaded.get('id')})")
+        st.info(f"File '{filename}' berhasil di-upload ke Shared Drive!")
         return uploaded.get("id")
-
     except HttpError as e:
         st.error("Terjadi error saat upload ke Shared Drive!")
         st.error(f"Status code: {e.resp.status}")
@@ -177,6 +177,7 @@ if st.session_state.submitted:
 # FORM HEADER
 # =========================
 st.title("Form P2H Unit")
+
 col1, col2, col3 = st.columns(3)
 with col1:
     tanggal = st.date_input("Tanggal")
@@ -187,20 +188,23 @@ with col3:
 
 # =========================
 # CHECKLIST
+# =========================
 st.subheader("Checklist Kondisi")
+
 results = {}
 photo_results = {}
 error_messages = []
+
 h1, h2, h3 = st.columns([2,3,3])
 with h1: st.markdown("**Item**")
 with h2: st.markdown("**Kondisi**")
 with h3: st.markdown("**Keterangan**")
+
 st.divider()
 
 for item in ITEMS:
     c1, c2, c3 = st.columns([2,3,3])
-    with c1:
-        st.write(item)
+    with c1: st.write(item)
     with c2:
         kondisi = st.radio("", ["Normal","Tidak Normal"], key=f"{item}_kondisi", horizontal=True)
     with c3:
@@ -229,7 +233,9 @@ for item in ITEMS:
 
 # =========================
 # SUBMIT
+# =========================
 if st.button("✅ Submit"):
+
     if not unit_rig:
         st.error("Unit rig wajib dipilih!")
         st.stop()
@@ -244,7 +250,9 @@ if st.button("✅ Submit"):
 
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Proses tiap item
+    # ------------------------------------
+    # PROSES PER ITEM
+    # ------------------------------------
     for item, value in results.items():
         kondisi = value["Kondisi"]
         keterangan = value["Keterangan"]
@@ -255,7 +263,11 @@ if st.button("✅ Submit"):
             saved_paths = save_photos(item, fotos, unit_rig, timestamp_str)
             foto_links = []
             for p in saved_paths:
-                drive_filename = generate_filename(prefix=unit_rig, custom_text=item.replace(" ","_"), ext=p.split(".")[-1])
+                drive_filename = generate_filename(
+                    prefix=unit_rig,
+                    custom_text=item.replace(" ", "_"),
+                    ext=p.split(".")[-1]
+                )
                 with open(p, "rb") as f:
                     temp_path = save_temp_file(f.read(), drive_filename)
                 gfile_id = upload_to_drive(temp_path, drive_filename)
@@ -276,10 +288,11 @@ if st.button("✅ Submit"):
         }
         append_to_excel(new_row)
 
-    # Upload Excel baru ke Shared Drive
+    # ============================
+    # UPLOAD EXCEL BARU KE DRIVE
+    # ============================
     with open(EXCEL_FILE, "rb") as f:
         temp_xlsx = save_temp_file(f.read(), EXCEL_FILE)
-
     upload_to_drive(temp_xlsx, "DATA_P2H.xlsx")
     delete_local_file(temp_xlsx)
 
