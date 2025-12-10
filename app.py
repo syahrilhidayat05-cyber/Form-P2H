@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pd
 from datetime import datetime
 import os
 import tempfile
@@ -41,8 +40,11 @@ creds = Credentials.from_service_account_info(
     scopes=SCOPES
 )
 
-gc = gspread.authorize(creds)
+# Google Drive API
 drive_service = build('drive', 'v3', credentials=creds)
+
+# Google Sheets API (direct, untuk Shared Drive append)
+sheets_service = build('sheets', 'v4', credentials=creds)
 
 # =========================
 # DELETE LOCAL FILE
@@ -90,12 +92,18 @@ def save_photos_to_drive(fotos, unit_rig, item, timestamp_str):
     return "\n".join(saved_links)
 
 # =========================
-# APPEND KE SHEET
+# APPEND KE SHEET (Google Sheets API)
 # =========================
 def append_to_sheet(row):
     try:
-        sheet = gc.open_by_key(SHEET_ID).sheet1
-        sheet.append_row(list(row.values()), value_input_option='USER_ENTERED')
+        body = {"values": [list(row.values())]}
+        sheets_service.spreadsheets().values().append(
+            spreadsheetId=SHEET_ID,
+            range="Sheet1!A1",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body=body
+        ).execute()
     except Exception as e:
         st.warning(f"Gagal append ke Sheet untuk item {row['Item']}: {e}")
 
@@ -109,7 +117,7 @@ if "photo_results" not in st.session_state:
     st.session_state.photo_results = {}
 
 if st.session_state.submitted:
-    st.success("✅ Data berhasil disimpan ke Google Sheet!")
+    st.success("✅ Data berhasil disimpan di Google Sheet!")
     if st.button("➕ Isi Form Baru"):
         st.session_state.submitted = False
         st.experimental_rerun()
