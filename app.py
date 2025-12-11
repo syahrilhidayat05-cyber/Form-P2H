@@ -1,4 +1,4 @@
-# app.py (REPLACE your file with this)
+# app.py (FINAL)
 import streamlit as st
 from datetime import datetime, timedelta
 import os
@@ -15,6 +15,7 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
+import streamlit.components.v1 as components
 
 # =========================
 # CONFIG
@@ -23,11 +24,11 @@ st.set_page_config(page_title="Form P2H Unit", layout="wide")
 TEMP_FOLDER = "temp_files"
 os.makedirs(TEMP_FOLDER, exist_ok=True)
 
-# ====== Edit these ======
+# ====== CONFIG YOU CAN EDIT ======
 SHEET_ID = "1e9X42pvEPZP1dTQ-IY4nM3VvYRJDHuuuFoJ1maxfPZs"
 DRIVE_FOLDER_ID = "1OkAj7Z2D5IVCB9fHmrNFWllRGl3hcPvq"
 MAX_PHOTOS = 3
-# ========================
+# ==================================
 
 RIG_LIST = [f"CNI-{str(i).zfill(2)}" for i in range(1, 17)]
 ITEMS = [
@@ -86,17 +87,41 @@ def upload_file_to_drive(local_path, drive_filename):
         st.warning(f"Gagal upload {drive_filename}: {e}")
         return None
 
-def append_to_sheet_row(values_list):
+def append_to_sheet_row_and_get_index(values_list, sheet_name="Sheet1"):
+    """
+    Append row ke Sheet1 dan kembalikan tuple (ok_bool, appended_row_zero_based or None).
+    Uses response['updates']['updatedRange'] to find exact row.
+    """
     try:
         body = {"values": [values_list]}
-        sheets_service.spreadsheets().values().append(
-            spreadsheetId=SHEET_ID, range="Sheet1!A1",
-            valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS", body=body
+        resp = sheets_service.spreadsheets().values().append(
+            spreadsheetId=SHEET_ID,
+            range=f"{sheet_name}!A1",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body=body
         ).execute()
-        return True
+        # try to extract updatedRange
+        updates = resp.get("updates", {})
+        updated_range = updates.get("updatedRange")
+        if updated_range:
+            # format like "Sheet1!A25:J25" or "Sheet1!A2:A2"
+            try:
+                last_part = updated_range.split("!")[1]
+                row_part = last_part.split(":")[-1]
+                # extract number from e.g. "J25" -> 25
+                row_num = int(re.sub(r'[^0-9]', '', row_part))
+                return True, row_num - 1  # convert to zero-based
+            except Exception:
+                pass
+        # fallback: get current row count and assume appended at end
+        cnt = get_sheet_row_count(sheet_name)
+        if cnt is not None:
+            return True, cnt - 1
+        return True, None
     except Exception as e:
         st.warning(f"Gagal append ke Sheet: {e}")
-        return False
+        return False, None
 
 def get_sheet_row_count(sheet_name="Sheet1"):
     try:
@@ -180,6 +205,7 @@ if "show_success" not in st.session_state:
     st.session_state.show_success = False
 
 def reset_form_state():
+    # clear item-related keys and photo_results, then clear show_success
     for key in list(st.session_state.keys()):
         if key in ("photo_results", "show_success"):
             continue
@@ -191,7 +217,7 @@ def reset_form_state():
     st.session_state.photo_results = {}
     st.session_state.show_success = False
 
-# If show_success flag set, render success page and exit
+# If show_success flag set, render success page and exit early
 if st.session_state.show_success:
     st.success("✅ Data berhasil disimpan ke Google Sheet!")
     if st.button("➕ Isi Form Baru"):
@@ -202,7 +228,9 @@ if st.session_state.show_success:
             st.info("Jika halaman belum kembali, silakan refresh manual.")
     st.stop()
 
-# Main: render form
+# =========================
+# UI: form
+# =========================
 st.title("Form P2H Unit")
 
 col_h1, col_h2 = st.columns([1, 6])
@@ -259,7 +287,9 @@ for item in ITEMS:
                 error_messages.append(f"{item}: maksimal {MAX_PHOTOS} foto")
         results[item] = {"Kondisi": kondisi, "Keterangan": keterangan}
 
-# Submit logic
+# =========================
+# SUBMIT
+# =========================
 if st.button("✅ Submit"):
     # validation
     if not unit_rig:
@@ -282,20 +312,14 @@ if st.button("✅ Submit"):
         now_local = datetime.now()
     timestamp_str = now_local.strftime("%Y%m%d_%H%M%S")
 
-    # total uploads for progress
+    # compute total uploads for progress
     total_uploads = sum(min(len(st.session_state.photo_results.get(it, [])), MAX_PHOTOS) for it in ITEMS if results[it]["Kondisi"] == "Tidak Normal")
 
     progress_bar = st.progress(0)
     progress_text = st.empty()
     uploaded_count = 0
     all_ok = True
-    oli_row_index = None  # index (0-based) where 'Oli mesin' for THIS submit was appended
-
-    # get start rows count before append
-    start_row_count = get_sheet_row_count("Sheet1")
-    if start_row_count is None:
-        start_row_count = 0
-    current_row_pointer = start_row_count  # will represent the 0-based index where next append will be placed
+    oli_row_index = None  # row index (0-based) of appended 'Oli mesin' for this submit
 
     with st.spinner("Sedang mengupload foto dan menyimpan ke Google Sheet..."):
         for item in ITEMS:
@@ -345,37 +369,42 @@ if st.button("✅ Submit"):
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             ]
 
-            ok = append_to_sheet_row(row_values)
+            ok, appended_index = append_to_sheet_row_and_get_index(row_values, sheet_name="Sheet1")
             if not ok:
                 all_ok = False
             else:
-                # if appended and item is 'Oli mesin', record its index (current_row_pointer)
-                if item == ITEMS[0] and oli_row_index is None:
-                    oli_row_index = current_row_pointer
-                # increment pointer because append added a row
-                current_row_pointer += 1
+                # if item is Oli mesin (ITEMS[0]) then we got exact appended index and save it
+                if item == ITEMS[0]:
+                    # appended_index may be None in rare fallback; check
+                    if appended_index is not None:
+                        oli_row_index = appended_index
 
-    # ensure progress 100%
+    # finalize progress
     progress_bar.progress(100)
     progress_text.markdown(f"Progress: **100%** ({uploaded_count}/{total_uploads} file)")
 
-    # highlight only the oli_row_index (for this submit)
+    # highlight only the oli_row_index (if we have it)
     if oli_row_index is not None:
         try:
             highlight_row_by_index(oli_row_index, color=(1.0, 1.0, 0.88), sheet_name="Sheet1")
         except Exception:
             pass
 
-    # show success page immediately in same run
+    # render success immediately in same run and set flag so subsequent runs show success top-of-file
     if all_ok:
         st.session_state.show_success = True
-        st.success("✅ Data berhasil disimpan ke Google Sheet!")
-        if st.button("➕ Isi Form Baru"):
-            reset_form_state()
-            try:
-                st.experimental_rerun()
-            except Exception:
-                st.info("Jika halaman belum kembali, silakan refresh manual.")
-        st.stop()
+        # try to force refresh UI to ensure success-only UI shows (some envs respect experimental_rerun)
+        try:
+            st.experimental_rerun()
+        except Exception:
+            # fallback: show success immediately and stop further rendering
+            st.success("✅ Data berhasil disimpan ke Google Sheet!")
+            if st.button("➕ Isi Form Baru"):
+                reset_form_state()
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    st.info("Jika halaman belum kembali, silakan refresh manual.")
+            st.stop()
     else:
         st.error("Proses selesai dengan beberapa peringatan (cek warning). Periksa konfigurasi API/akses dan ulangi jika perlu.")
