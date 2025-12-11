@@ -59,7 +59,6 @@ def save_temp_file(content, filename):
     """Simpan bytes content ke file temp dan kembalikan path."""
     temp_path = os.path.join(tempfile.gettempdir(), filename)
     with open(temp_path, "wb") as f:
-        # content bisa berupa bytes atau memoryview; pastikan bytes
         if isinstance(content, (bytes, bytearray)):
             f.write(content)
         else:
@@ -85,53 +84,6 @@ def upload_file_to_drive(local_path, drive_filename):
     except HttpError as e:
         st.warning(f"Gagal upload {drive_filename} ke Drive: {e}")
         return None
-
-def save_photos_locally_and_upload(fotos, unit_rig, item, timestamp_str):
-    """
-    Simpan foto temporer, upload ke Drive dengan nama konsisten:
-      unit_rig_timestamp_item_safe_index.ext
-    Kembalikan list of hyperlink formulas (length <= MAX_PHOTOS).
-    Jika upload gagal, entry akan menjadi "" sehingga kolom sheet kosong.
-    """
-    foto_links = []
-    if not fotos:
-        return []
-
-    item_safe = safe_fname_component(item.replace(' ', '_'))
-
-    for idx, foto in enumerate(fotos, start=1):
-        if idx > MAX_PHOTOS:
-            break
-        # Dapatkan ekstensi asli (jika tidak ada, default .jpg)
-        orig_ext = os.path.splitext(foto.name)[1] or ".jpg"
-        drive_filename = f"{unit_rig}_{timestamp_str}_{item_safe}_{idx}{orig_ext}"
-
-        # baca konten file (UploadedFile)
-        try:
-            # beberapa objek punya getbuffer(), beberapa punya read()
-            if hasattr(foto, "getbuffer"):
-                content = foto.getbuffer()
-            else:
-                content = foto.read()
-        except Exception:
-            # fallback
-            try:
-                content = foto.read()
-            except Exception:
-                content = b""
-
-        # simpan temp lalu upload
-        local_temp = save_temp_file(content, drive_filename)
-        file_id = upload_file_to_drive(local_temp, drive_filename)
-        delete_local_file(local_temp)
-
-        if file_id:
-            # kirim formula HYPERLINK agar diinterpretasikan oleh Sheets saat valueInputOption USER_ENTERED
-            foto_links.append(f'=HYPERLINK("https://drive.google.com/file/d/{file_id}/view","Foto")')
-        else:
-            foto_links.append("")
-
-    return foto_links
 
 def append_to_sheet_row(values_list):
     """
@@ -168,7 +120,11 @@ if st.session_state.submitted:
         st.session_state.submitted = False
         st.session_state.photo_results = {}
         # safe rerun setelah reset
-        st.experimental_rerun()
+        try:
+            st.experimental_rerun()
+        except Exception:
+            # fallback: inform user to refresh
+            st.info("Halaman tidak otomatis refresh — silakan refresh manual jika perlu.")
     st.stop()
 
 # =========================
@@ -211,7 +167,6 @@ for item in ITEMS:
                 try:
                     st.image([f.read() for f in fotos], width=200)
                 except Exception:
-                    # some environments may need to seek back; safe approach: re-open via bytes from getbuffer if available
                     try:
                         imgs = []
                         for fobj in fotos:
@@ -251,42 +206,109 @@ if st.button("✅ Submit"):
     # konsisten timestamp untuk semua foto di satu submit
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    all_ok = True
+    # Hitung total upload untuk progress bar
+    total_uploads = 0
     for item, value in results.items():
-        kondisi = value["Kondisi"]
-        keterangan = value["Keterangan"]
-
-        if kondisi == "Tidak Normal":
+        if value["Kondisi"] == "Tidak Normal":
             fotos = st.session_state.photo_results.get(item, [])
-            foto_links = save_photos_locally_and_upload(fotos, unit_rig, item, timestamp_str)
-            # pad agar selalu length == MAX_PHOTOS
+            total_uploads += min(len(fotos), MAX_PHOTOS)
+
+    # siapkan UI progress
+    progress_bar = st.progress(0)
+    progress_text = st.empty()
+    uploaded_count = 0
+    all_ok = True
+
+    # gunakan spinner selama proses berjalan
+    with st.spinner("Sedang mengupload foto dan menyimpan ke Google Sheet..."):
+        # proses per item, upload per foto agar bisa update progress
+        for item, value in results.items():
+            kondisi = value["Kondisi"]
+            keterangan = value["Keterangan"]
+
+            foto_links = []
+            if kondisi == "Tidak Normal":
+                fotos = st.session_state.photo_results.get(item, [])
+                # lakukan upload foto satu per satu (agar bisa update progress)
+                item_safe = safe_fname_component(item.replace(' ', '_'))
+
+                for idx, foto in enumerate(fotos, start=1):
+                    if idx > MAX_PHOTOS:
+                        break
+                    # baca content (prefer getbuffer)
+                    try:
+                        content = foto.getbuffer() if hasattr(foto, "getbuffer") else foto.read()
+                    except Exception:
+                        try:
+                            content = foto.read()
+                        except Exception:
+                            content = b""
+
+                    # buat nama file konsisten
+                    orig_ext = os.path.splitext(foto.name)[1] or ".jpg"
+                    drive_filename = f"{unit_rig}_{timestamp_str}_{item_safe}_{idx}{orig_ext}"
+
+                    # simpan temp, upload, hapus temp
+                    local_temp = save_temp_file(content, drive_filename)
+                    file_id = upload_file_to_drive(local_temp, drive_filename)
+                    delete_local_file(local_temp)
+
+                    if file_id:
+                        foto_links.append(f'=HYPERLINK("https://drive.google.com/file/d/{file_id}/view","Foto")')
+                    else:
+                        foto_links.append("")
+
+                    # update progress
+                    uploaded_count += 1
+                    if total_uploads > 0:
+                        pct = int(uploaded_count / total_uploads * 100)
+                    else:
+                        pct = 100
+                    progress_bar.progress(pct)
+                    progress_text.markdown(f"Progress: **{pct}%** ({uploaded_count}/{total_uploads} file)")
+            else:
+                foto_links = [""] * MAX_PHOTOS
+
+            # pad foto_links agar selalu sesuai MAX_PHOTOS
             while len(foto_links) < MAX_PHOTOS:
                 foto_links.append("")
-            if len(foto_links) > MAX_PHOTOS:
-                foto_links = foto_links[:MAX_PHOTOS]
-        else:
-            foto_links = [""] * MAX_PHOTOS
 
-        # susun row – pastikan urutan ini sesuai header di Google Sheet
-        row_values = [
-            tanggal.strftime("%Y-%m-%d"),
-            unit_rig,
-            geologist,
-            item,
-            kondisi,
-            keterangan,
-            *foto_links,  # Foto1..FotoN
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        ]
+            # susun row – pastikan urutan ini sesuai header di Google Sheet
+            row_values = [
+                tanggal.strftime("%Y-%m-%d"),
+                unit_rig,
+                geologist,
+                item,
+                kondisi,
+                keterangan,
+                *foto_links,  # Foto1..FotoN
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            ]
 
-        ok = append_to_sheet_row(row_values)
-        if not ok:
-            all_ok = False
-            # lanjutkan ke item lain meskipun ada kegagalan (warning sudah di-emit)
+            ok = append_to_sheet_row(row_values)
+            if not ok:
+                all_ok = False
+                # teruskan ke item lain meski ada kegagalan
 
+    # pastikan progress 100% kalau semua upload selesai
+    progress_bar.progress(100)
+    progress_text.markdown(f"Progress: **100%** ({uploaded_count}/{total_uploads} file)")
+
+    # Setelah semua selesai, gunakan Opsi A: try rerun, fallback UI aman
     if all_ok:
         st.session_state.submitted = True
-        # tampilkan halaman sukses (kondisi di atas)
-        st.experimental_rerun()
+        try:
+            st.experimental_rerun()
+        except Exception:
+            # fallback: tampilkan pesan sukses dan tombol reset
+            st.success("✅ Data berhasil disimpan ke Google Sheet!")
+            if st.button("➕ Isi Form Baru"):
+                st.session_state.submitted = False
+                st.session_state.photo_results = {}
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    st.info("Jika halaman belum berubah, silakan refresh halaman atau klik tombol kembali di browser.")
+            st.stop()
     else:
         st.error("Proses selesai dengan beberapa peringatan (cek warning). Periksa konfigurasi API/akses dan ulangi jika perlu.")
