@@ -1,3 +1,4 @@
+# app.py (final — replace your file with this)
 import streamlit as st
 from datetime import datetime, timedelta
 import os
@@ -150,7 +151,6 @@ def highlight_row_by_index(row_index_zero_based, color=(1.0, 1.0, 0.88), sheet_n
                 col_count = grid.get("columnCount", 10)
                 break
         if sheet_id is None:
-            # fallback: first sheet
             first = ss.get("sheets", [])[0].get("properties", {})
             sheet_id = first.get("sheetId")
             col_count = first.get("gridProperties", {}).get("columnCount", 10)
@@ -179,7 +179,6 @@ def highlight_row_by_index(row_index_zero_based, color=(1.0, 1.0, 0.88), sheet_n
         sheets_service.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body=body).execute()
         return True
     except Exception as e:
-        # non-fatal; hanya beri warning
         st.warning(f"Gagal memberi warna pada baris: {e}")
         return False
 
@@ -205,7 +204,6 @@ if st.session_state.get("reset", False):
     st.session_state.photo_results = {}
     st.session_state.submitted = False
     st.session_state.reset = False
-    # continue render (this rerun shows fresh form)
 
 # Main container: kita render seluruh form di dalam container ini.
 main = st.container()
@@ -249,7 +247,6 @@ with main:
                 keterangan = st.text_input("Keterangan", key=f"{item}_keterangan", placeholder="Isi keterangan")
                 fotos = st.file_uploader("Upload Foto (min 1, max 3)", type=["jpg","jpeg","png"],
                                          accept_multiple_files=True, key=f"{item}_foto")
-                # simpan uploader ke session_state agar tidak hilang across reruns
                 if fotos:
                     st.session_state.photo_results[item] = fotos
 
@@ -311,6 +308,11 @@ with main:
                 fotos = st.session_state.photo_results.get(item, [])
                 total_uploads += min(len(fotos), MAX_PHOTOS)
 
+        # ambil starting row count sebelum append (penting untuk menghitung baris 'Oli mesin')
+        start_count = get_sheet_row_count("Sheet1")
+        if start_count is None:
+            start_count = 0
+
         # siapkan UI progress
         progress_bar = st.progress(0)
         progress_text = st.empty()
@@ -320,7 +322,7 @@ with main:
         # gunakan spinner selama proses berjalan
         with st.spinner("Sedang mengupload foto dan menyimpan ke Google Sheet..."):
             # proses per item, upload per foto agar bisa update progress
-            for item, value in results.items():
+            for item_index, (item, value) in enumerate(results.items()):
                 kondisi = value["Kondisi"]
                 keterangan = value["Keterangan"]
 
@@ -386,12 +388,14 @@ with main:
                 if not ok:
                     all_ok = False
 
-                # jika append sukses dan item == 'Oli mesin', highlight row terakhir (baris yang baru dimasukkan)
+                # jika append sukses dan item == 'Oli mesin' (ITEMS[0]), highlight baris start_count
                 if ok and item == ITEMS[0]:
-                    rc = get_sheet_row_count("Sheet1")
-                    if rc is not None and rc > 0:
-                        last_row_zero_based = rc - 1  # convert to 0-based index
-                        highlight_row_by_index(last_row_zero_based, color=(1.0, 1.0, 0.88), sheet_name="Sheet1")
+                    # the row we just added is at zero-based index = start_count
+                    highlight_row_by_index(start_count, color=(1.0, 1.0, 0.88), sheet_name="Sheet1")
+
+                # increment start_count after every successful append because the next appended row index increases
+                if ok:
+                    start_count += 1
 
         # pastikan progress 100% kalau semua upload selesai
         progress_bar.progress(100)
@@ -402,19 +406,16 @@ with main:
             # set submitted flag first
             st.session_state.submitted = True
 
-            # coba langsung rerun agar top-of-file menampilkan halaman sukses
-            try:
-                st.experimental_rerun()
-            except Exception:
-                # fallback: kosongkan main container and tampilkan sukses serta tombol reset
-                main.empty()
-                st.success("✅ Data berhasil disimpan ke Google Sheet!")
-                if st.button("➕ Isi Form Baru"):
-                    st.session_state.reset = True
-                    try:
-                        st.experimental_rerun()
-                    except Exception:
-                        st.info("Jika halaman belum berubah otomatis, silakan refresh halaman.")
-                st.stop()
+            # TRY: langsung tampilkan sukses di tempat yang jelas — kosongkan container dan render success
+            # lalu stop script agar form tidak muncul lagi pada run ini.
+            main.empty()
+            st.success("✅ Data berhasil disimpan ke Google Sheet!")
+            if st.button("➕ Isi Form Baru"):
+                st.session_state.reset = True
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    st.info("Jika halaman belum berubah otomatis, silakan refresh halaman.")
+            st.stop()
         else:
             st.error("Proses selesai dengan beberapa peringatan (cek warning). Periksa konfigurasi API/akses dan ulangi jika perlu.")
