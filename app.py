@@ -1,8 +1,15 @@
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import re
 import tempfile
+
+# timezone: try zoneinfo first (Python 3.9+), fallback to manual UTC+7
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
+
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -20,7 +27,7 @@ SHEET_ID = "1e9X42pvEPZP1dTQ-IY4nM3VvYRJDHuuuFoJ1maxfPZs"
 DRIVE_FOLDER_ID = "1OkAj7Z2D5IVCB9fHmrNFWllRGl3hcPvq"
 MAX_PHOTOS = 3  # ubah jika ingin mendukung lebih banyak foto per item
 
-RIG_LIST = [f"CNI-{str(i).zfill(2)}" for i in range(1,17)]
+RIG_LIST = [f"CNI-{str(i).zfill(2)}" for i in range(1, 17)]
 ITEMS = [
     "Oli mesin","Air Radiator","Vanbelt","Tangki solar","Oli hidraulik",
     "Oil seal Hidraulik","Baut Skor menara","Wire line","Clamp terpasang",
@@ -59,11 +66,10 @@ def save_temp_file(content, filename):
     """Simpan bytes content ke file temp dan kembalikan path."""
     temp_path = os.path.join(tempfile.gettempdir(), filename)
     with open(temp_path, "wb") as f:
-        # content bisa berupa bytes / memoryview / bytearray
         if isinstance(content, (bytes, bytearray)):
             f.write(content)
         else:
-            # fallback: try to get bytes
+            # fallback: try to get bytes-like
             try:
                 f.write(content.tobytes())
             except Exception:
@@ -208,8 +214,15 @@ with main:
                 st.warning(e)
             st.stop()
 
-        # konsisten timestamp untuk semua foto di satu submit (Format A: HHMMSS)
-        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # konsisten timestamp untuk semua foto di satu submit (Format A: HHMMSS local Jakarta)
+        try:
+            if ZoneInfo is not None:
+                now_local = datetime.now(ZoneInfo("Asia/Jakarta"))
+            else:
+                now_local = datetime.utcnow() + timedelta(hours=7)
+        except Exception:
+            now_local = datetime.now()
+        timestamp_str = now_local.strftime("%Y%m%d_%H%M%S")
 
         # Hitung total upload untuk progress bar
         total_uploads = 0
@@ -298,24 +311,26 @@ with main:
         progress_bar.progress(100)
         progress_text.markdown(f"Progress: **100%** ({uploaded_count}/{total_uploads} file)")
 
-        # Setelah semua selesai: Tampilkan halaman sukses **SEGERA** dengan mengganti isi container
+        # Setelah semua selesai: coba tampilkan halaman sukses dengan mengganti isi container dan rerun
         if all_ok:
-            # set flag supaya di run berikutnya tampil sukses di luar container juga
             st.session_state.submitted = True
 
             # kosongkan container (menghapus form UI dari page)
             main.empty()
 
-            # tampilkan halaman sukses di lokasi container yang tadi (instantly)
-            st.success("✅ Data berhasil disimpan ke Google Sheet!")
-            if st.button("➕ Isi Form Baru"):
-                st.session_state.submitted = False
-                st.session_state.photo_results = {}
-                try:
-                    st.experimental_rerun()
-                except Exception:
-                    st.info("Jika halaman belum berubah otomatis, silakan refresh halaman.")
-            # hentikan eksekusi lebih lanjut di run ini
-            st.stop()
+            # coba rerun sehingga top-of-file akan menampilkan halaman sukses (di blok st.session_state.submitted)
+            try:
+                st.experimental_rerun()
+            except Exception:
+                # fallback: tampilkan pesan sukses langsung jika rerun gagal
+                st.success("✅ Data berhasil disimpan ke Google Sheet!")
+                if st.button("➕ Isi Form Baru"):
+                    st.session_state.submitted = False
+                    st.session_state.photo_results = {}
+                    try:
+                        st.experimental_rerun()
+                    except Exception:
+                        st.info("Jika halaman belum berubah otomatis, silakan refresh halaman.")
+                st.stop()
         else:
             st.error("Proses selesai dengan beberapa peringatan (cek warning). Periksa konfigurasi API/akses dan ulangi jika perlu.")
