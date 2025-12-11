@@ -102,7 +102,7 @@ def append_to_sheet_row(values_list):
     """
     Append row ke Sheet1 dengan urutan kolom:
     [Tanggal, Unit Rig, Geologist, Item, Kondisi, Keterangan, Foto1..FotoN, Waktu Submit]
-    Pastikan header di Google Sheet sesuai urutan ini.
+    Mengembalikan True/False.
     """
     try:
         body = {"values": [values_list]}
@@ -118,6 +118,71 @@ def append_to_sheet_row(values_list):
         st.warning(f"Gagal append ke Sheet: {e}")
         return False
 
+def get_sheet_row_count(sheet_name="Sheet1"):
+    """Return number of rows that currently memiliki value (count of column A)."""
+    try:
+        resp = sheets_service.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID,
+            range=f"{sheet_name}!A:A"
+        ).execute()
+        values = resp.get("values", [])
+        return len(values)
+    except Exception:
+        return None
+
+def highlight_row_by_index(row_index_zero_based, color=(1.0, 1.0, 0.88), sheet_name="Sheet1"):
+    """
+    Warnai satu baris (row_index_zero_based) di sheet dengan warna RGB (0..1).
+    Mengambil sheetId & columnCount otomatis.
+    """
+    try:
+        ss = sheets_service.spreadsheets().get(
+            spreadsheetId=SHEET_ID,
+            fields="sheets(properties(sheetId,title,gridProperties(columnCount)))"
+        ).execute()
+        sheet_id = None
+        col_count = 10
+        for s in ss.get("sheets", []):
+            props = s.get("properties", {})
+            if props.get("title") == sheet_name:
+                sheet_id = props.get("sheetId")
+                grid = props.get("gridProperties", {})
+                col_count = grid.get("columnCount", 10)
+                break
+        if sheet_id is None:
+            # fallback: first sheet
+            first = ss.get("sheets", [])[0].get("properties", {})
+            sheet_id = first.get("sheetId")
+            col_count = first.get("gridProperties", {}).get("columnCount", 10)
+
+        r, g, b = color
+        requests = [
+            {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": row_index_zero_based,
+                        "endRowIndex": row_index_zero_based + 1,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": col_count
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "backgroundColor": {"red": r, "green": g, "blue": b}
+                        }
+                    },
+                    "fields": "userEnteredFormat.backgroundColor"
+                }
+            }
+        ]
+        body = {"requests": requests}
+        sheets_service.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body=body).execute()
+        return True
+    except Exception as e:
+        # non-fatal; hanya beri warning
+        st.warning(f"Gagal memberi warna pada baris: {e}")
+        return False
+
 # =========================
 # SESSION STATE & RESET LOGIC
 # =========================
@@ -126,18 +191,23 @@ if "submitted" not in st.session_state:
 if "photo_results" not in st.session_state:
     st.session_state.photo_results = {}
 
-# Reset handler: jika user menekan Isi Form Baru kita set reset=True lalu rerun;
-# di awal run kita akan membersihkan session state jika reset flag aktif.
+# reset flow: when reset flag true, clear dynamic keys then continue
 if st.session_state.get("reset", False):
-    # Hapus semua dynamic keys yang mungkin tersisa
-    keys_to_remove = [k for k in st.session_state.keys() if k.startswith(tuple([f"{it}_" for it in ITEMS]))]
-    for k in keys_to_remove:
-        del st.session_state[k]
-    # juga kosongkan photo_results
+    # remove dynamic keys for items (those created by radio/text/file_uploader)
+    for key in list(st.session_state.keys()):
+        # keep gdrive, submitted, photo_results, reset
+        if key in ("submitted", "photo_results", "reset", "gdrive"):
+            continue
+        # remove keys that end with known suffixes or start with item prefix
+        if any(key.startswith(f"{it}_") for it in ITEMS) or key.endswith("_keterangan") or key.endswith("_foto"):
+            try:
+                del st.session_state[key]
+            except Exception:
+                pass
     st.session_state.photo_results = {}
     st.session_state.submitted = False
     st.session_state.reset = False
-    # continue rendering form on this rerun
+    # continue render (this rerun shows fresh form)
 
 # Main container: kita render seluruh form di dalam container ini.
 main = st.container()
@@ -146,7 +216,6 @@ main = st.container()
 if st.session_state.submitted:
     st.success("✅ Data berhasil disimpan ke Google Sheet!")
     if st.button("➕ Isi Form Baru"):
-        # set reset flag and try to rerun; this should require only one click
         st.session_state.reset = True
         try:
             st.experimental_rerun()
@@ -274,9 +343,7 @@ with main:
                             except Exception:
                                 content = b""
 
-                        # **UBAHAN UTAMA untuk ordering**:
-                        # letakkan timestamp di awal sehingga nama file berurut sesuai waktu submit
-                        # Format filename: YYYYMMDD_HHMMSS_unitrig_item_index.ext
+                        # Format filename: TIMESTAMP_unit_item_index.ext (timestamp di awal supaya sort by name = sort by time)
                         orig_ext = os.path.splitext(foto.name)[1] or ".jpg"
                         drive_filename = f"{timestamp_str}_{unit_rig}_{item_safe}_{idx}{orig_ext}"
 
@@ -320,7 +387,15 @@ with main:
                 ok = append_to_sheet_row(row_values)
                 if not ok:
                     all_ok = False
-                    # lanjutkan ke item lain meskipun ada kegagalan
+
+                # jika append sukses, highlight row terakhir (baris yang baru dimasukkan)
+                if ok:
+                    # dapatkan jumlah baris sekarang (1-based count)
+                    rc = get_sheet_row_count("Sheet1")
+                    if rc is not None and rc > 0:
+                        last_row_zero_based = rc - 1  # convert to 0-based index
+                        # warnai baris terakhir
+                        highlight_row_by_index(last_row_zero_based, color=(1.0, 1.0, 0.88), sheet_name="Sheet1")
 
         # pastikan progress 100% kalau semua upload selesai
         progress_bar.progress(100)
@@ -328,15 +403,15 @@ with main:
 
         # Setelah semua selesai: tampilkan halaman sukses langsung dan siapkan reset sekali klik
         if all_ok:
+            # set submitted flag first
             st.session_state.submitted = True
 
-            # kosongkan container (menghapus form UI dari page)
-            main.empty()
-
-            # Coba rerun supaya top-of-file menampilkan halaman sukses; jika gagal, tampilkan fallback
+            # coba langsung rerun agar top-of-file akan render halaman sukses
             try:
                 st.experimental_rerun()
             except Exception:
+                # fallback: kosongkan main container and tampilkan sukses serta tombol reset
+                main.empty()
                 st.success("✅ Data berhasil disimpan ke Google Sheet!")
                 if st.button("➕ Isi Form Baru"):
                     st.session_state.reset = True
