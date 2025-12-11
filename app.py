@@ -1,4 +1,4 @@
-# app.py (FINAL)
+# app.py — FINAL (navigation fix: query-param + rerun + js redirect)
 import streamlit as st
 from datetime import datetime, timedelta
 import os
@@ -101,20 +101,16 @@ def append_to_sheet_row_and_get_index(values_list, sheet_name="Sheet1"):
             insertDataOption="INSERT_ROWS",
             body=body
         ).execute()
-        # try to extract updatedRange
         updates = resp.get("updates", {})
         updated_range = updates.get("updatedRange")
         if updated_range:
-            # format like "Sheet1!A25:J25" or "Sheet1!A2:A2"
             try:
                 last_part = updated_range.split("!")[1]
                 row_part = last_part.split(":")[-1]
-                # extract number from e.g. "J25" -> 25
                 row_num = int(re.sub(r'[^0-9]', '', row_part))
-                return True, row_num - 1  # convert to zero-based
+                return True, row_num - 1
             except Exception:
                 pass
-        # fallback: get current row count and assume appended at end
         cnt = get_sheet_row_count(sheet_name)
         if cnt is not None:
             return True, cnt - 1
@@ -197,15 +193,19 @@ def clear_all_highlights(sheet_name="Sheet1"):
         return False
 
 # =========================
-# SESSION STATE init
+# SESSION & query-param handling
 # =========================
 if "photo_results" not in st.session_state:
     st.session_state.photo_results = {}
 if "show_success" not in st.session_state:
     st.session_state.show_success = False
 
+# If URL query param ?submitted exists, consider it success and show success UI
+qparams = st.experimental_get_query_params()
+if "submitted" in qparams and qparams.get("submitted"):
+    st.session_state.show_success = True
+
 def reset_form_state():
-    # clear item-related keys and photo_results, then clear show_success
     for key in list(st.session_state.keys()):
         if key in ("photo_results", "show_success"):
             continue
@@ -216,8 +216,13 @@ def reset_form_state():
                 pass
     st.session_state.photo_results = {}
     st.session_state.show_success = False
+    # clear query params so subsequent visits not treated as submitted
+    try:
+        st.experimental_set_query_params()
+    except Exception:
+        pass
 
-# If show_success flag set, render success page and exit early
+# If show_success flag set, render success page and stop
 if st.session_state.show_success:
     st.success("✅ Data berhasil disimpan ke Google Sheet!")
     if st.button("➕ Isi Form Baru"):
@@ -373,11 +378,8 @@ if st.button("✅ Submit"):
             if not ok:
                 all_ok = False
             else:
-                # if item is Oli mesin (ITEMS[0]) then we got exact appended index and save it
-                if item == ITEMS[0]:
-                    # appended_index may be None in rare fallback; check
-                    if appended_index is not None:
-                        oli_row_index = appended_index
+                if item == ITEMS[0] and appended_index is not None:
+                    oli_row_index = appended_index
 
     # finalize progress
     progress_bar.progress(100)
@@ -390,21 +392,31 @@ if st.button("✅ Submit"):
         except Exception:
             pass
 
-    # render success immediately in same run and set flag so subsequent runs show success top-of-file
+    # render success: set query param + set show_success and attempt rerun; also JS redirect fallback
     if all_ok:
+        # create a unique token to set as query param (timestamp_str is fine)
+        try:
+            st.experimental_set_query_params(submitted=timestamp_str)
+        except Exception:
+            pass
         st.session_state.show_success = True
-        # try to force refresh UI to ensure success-only UI shows (some envs respect experimental_rerun)
+
+        # try server rerun first
         try:
             st.experimental_rerun()
         except Exception:
-            # fallback: show success immediately and stop further rendering
-            st.success("✅ Data berhasil disimpan ke Google Sheet!")
-            if st.button("➕ Isi Form Baru"):
-                reset_form_state()
-                try:
-                    st.experimental_rerun()
-                except Exception:
-                    st.info("Jika halaman belum kembali, silakan refresh manual.")
-            st.stop()
+            # fallback: force client reload to URL with ?submitted=timestamp
+            try:
+                components.html(f"""<script>window.location.search = '?submitted={timestamp_str}';</script>""", height=0)
+            except Exception:
+                # final fallback: show success message here
+                st.success("✅ Data berhasil disimpan ke Google Sheet!")
+                if st.button("➕ Isi Form Baru"):
+                    reset_form_state()
+                    try:
+                        st.experimental_rerun()
+                    except Exception:
+                        st.info("Jika halaman belum kembali, silakan refresh manual.")
+                st.stop()
     else:
         st.error("Proses selesai dengan beberapa peringatan (cek warning). Periksa konfigurasi API/akses dan ulangi jika perlu.")
