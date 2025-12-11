@@ -119,12 +119,25 @@ def append_to_sheet_row(values_list):
         return False
 
 # =========================
-# SESSION STATE
+# SESSION STATE & RESET LOGIC
 # =========================
 if "submitted" not in st.session_state:
     st.session_state.submitted = False
 if "photo_results" not in st.session_state:
     st.session_state.photo_results = {}
+
+# Reset handler: jika user menekan Isi Form Baru kita set reset=True lalu rerun;
+# di awal run kita akan membersihkan session state jika reset flag aktif.
+if st.session_state.get("reset", False):
+    # Hapus semua dynamic keys yang mungkin tersisa
+    keys_to_remove = [k for k in st.session_state.keys() if k.startswith(tuple([f"{it}_" for it in ITEMS]))]
+    for k in keys_to_remove:
+        del st.session_state[k]
+    # juga kosongkan photo_results
+    st.session_state.photo_results = {}
+    st.session_state.submitted = False
+    st.session_state.reset = False
+    # continue rendering form on this rerun
 
 # Main container: kita render seluruh form di dalam container ini.
 main = st.container()
@@ -133,12 +146,12 @@ main = st.container()
 if st.session_state.submitted:
     st.success("✅ Data berhasil disimpan ke Google Sheet!")
     if st.button("➕ Isi Form Baru"):
-        st.session_state.submitted = False
-        st.session_state.photo_results = {}
+        # set reset flag and try to rerun; this should require only one click
+        st.session_state.reset = True
         try:
             st.experimental_rerun()
         except Exception:
-            st.info("Halaman tidak otomatis refresh — silakan refresh manual jika perlu.")
+            st.info("Proses reset gagal otomatis — silakan refresh halaman jika tidak kembali ke form.")
     st.stop()
 
 # =========================
@@ -214,7 +227,7 @@ with main:
                 st.warning(e)
             st.stop()
 
-        # konsisten timestamp untuk semua foto di satu submit (Format A: HHMMSS local Jakarta)
+        # konsisten timestamp untuk semua foto di satu submit (Asia/Jakarta)
         try:
             if ZoneInfo is not None:
                 now_local = datetime.now(ZoneInfo("Asia/Jakarta"))
@@ -261,9 +274,11 @@ with main:
                             except Exception:
                                 content = b""
 
-                        # buat nama file sesuai Format A: unit_YYYYMMDD_HHMMSS_item_index.ext
+                        # **UBAHAN UTAMA untuk ordering**:
+                        # letakkan timestamp di awal sehingga nama file berurut sesuai waktu submit
+                        # Format filename: YYYYMMDD_HHMMSS_unitrig_item_index.ext
                         orig_ext = os.path.splitext(foto.name)[1] or ".jpg"
-                        drive_filename = f"{unit_rig}_{timestamp_str}_{item_safe}_{idx}{orig_ext}"
+                        drive_filename = f"{timestamp_str}_{unit_rig}_{item_safe}_{idx}{orig_ext}"
 
                         # simpan temp, upload, hapus temp
                         local_temp = save_temp_file(content, drive_filename)
@@ -311,22 +326,20 @@ with main:
         progress_bar.progress(100)
         progress_text.markdown(f"Progress: **100%** ({uploaded_count}/{total_uploads} file)")
 
-        # Setelah semua selesai: coba tampilkan halaman sukses dengan mengganti isi container dan rerun
+        # Setelah semua selesai: tampilkan halaman sukses langsung dan siapkan reset sekali klik
         if all_ok:
             st.session_state.submitted = True
 
             # kosongkan container (menghapus form UI dari page)
             main.empty()
 
-            # coba rerun sehingga top-of-file akan menampilkan halaman sukses (di blok st.session_state.submitted)
+            # Coba rerun supaya top-of-file menampilkan halaman sukses; jika gagal, tampilkan fallback
             try:
                 st.experimental_rerun()
             except Exception:
-                # fallback: tampilkan pesan sukses langsung jika rerun gagal
                 st.success("✅ Data berhasil disimpan ke Google Sheet!")
                 if st.button("➕ Isi Form Baru"):
-                    st.session_state.submitted = False
-                    st.session_state.photo_results = {}
+                    st.session_state.reset = True
                     try:
                         st.experimental_rerun()
                     except Exception:
