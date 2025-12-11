@@ -195,10 +195,8 @@ if "photo_results" not in st.session_state:
 if st.session_state.get("reset", False):
     # remove dynamic keys for items (those created by radio/text/file_uploader)
     for key in list(st.session_state.keys()):
-        # keep gdrive, submitted, photo_results, reset
         if key in ("submitted", "photo_results", "reset", "gdrive"):
             continue
-        # remove keys that end with known suffixes or start with item prefix
         if any(key.startswith(f"{it}_") for it in ITEMS) or key.endswith("_keterangan") or key.endswith("_foto"):
             try:
                 del st.session_state[key]
@@ -388,13 +386,11 @@ with main:
                 if not ok:
                     all_ok = False
 
-                # jika append sukses, highlight row terakhir (baris yang baru dimasukkan)
-                if ok:
-                    # dapatkan jumlah baris sekarang (1-based count)
+                # jika append sukses dan item == 'Oli mesin', highlight row terakhir (baris yang baru dimasukkan)
+                if ok and item == ITEMS[0]:
                     rc = get_sheet_row_count("Sheet1")
                     if rc is not None and rc > 0:
                         last_row_zero_based = rc - 1  # convert to 0-based index
-                        # warnai baris terakhir
                         highlight_row_by_index(last_row_zero_based, color=(1.0, 1.0, 0.88), sheet_name="Sheet1")
 
         # pastikan progress 100% kalau semua upload selesai
@@ -406,7 +402,7 @@ with main:
             # set submitted flag first
             st.session_state.submitted = True
 
-            # coba langsung rerun agar top-of-file akan render halaman sukses
+            # coba langsung rerun agar top-of-file menampilkan halaman sukses
             try:
                 st.experimental_rerun()
             except Exception:
