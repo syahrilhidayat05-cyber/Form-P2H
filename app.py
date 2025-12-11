@@ -1,4 +1,4 @@
-# app.py (final — replace your file with this)
+# app.py — final update (use this to replace your file)
 import streamlit as st
 from datetime import datetime, timedelta
 import os
@@ -10,6 +10,8 @@ try:
     from zoneinfo import ZoneInfo
 except Exception:
     ZoneInfo = None
+
+import streamlit.components.v1 as components
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -100,11 +102,7 @@ def upload_file_to_drive(local_path, drive_filename):
         return None
 
 def append_to_sheet_row(values_list):
-    """
-    Append row ke Sheet1 dengan urutan kolom:
-    [Tanggal, Unit Rig, Geologist, Item, Kondisi, Keterangan, Foto1..FotoN, Waktu Submit]
-    Mengembalikan True/False.
-    """
+    """Append row ke Sheet1; return True jika sukses."""
     try:
         body = {"values": [values_list]}
         sheets_service.spreadsheets().values().append(
@@ -182,6 +180,56 @@ def highlight_row_by_index(row_index_zero_based, color=(1.0, 1.0, 0.88), sheet_n
         st.warning(f"Gagal memberi warna pada baris: {e}")
         return False
 
+def clear_all_highlights(sheet_name="Sheet1"):
+    """
+    Menghapus semua backgroundColor (set ke putih) pada sheet.
+    Gunakan hati-hati — ini menghapus highlight lama.
+    """
+    try:
+        ss = sheets_service.spreadsheets().get(
+            spreadsheetId=SHEET_ID,
+            fields="sheets(properties(sheetId,title,gridProperties(columnCount)))"
+        ).execute()
+        sheet_id = None
+        col_count = 10
+        for s in ss.get("sheets", []):
+            props = s.get("properties", {})
+            if props.get("title") == sheet_name:
+                sheet_id = props.get("sheetId")
+                grid = props.get("gridProperties", {})
+                col_count = grid.get("columnCount", 10)
+                break
+        if sheet_id is None:
+            first = ss.get("sheets", [])[0].get("properties", {})
+            sheet_id = first.get("sheetId")
+            col_count = first.get("gridProperties", {}).get("columnCount", 10)
+
+        requests = [
+            {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": 0,
+                        "endRowIndex": 10000,  # cukup besar untuk hapus semua (bisa disesuaikan)
+                        "startColumnIndex": 0,
+                        "endColumnIndex": col_count
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "backgroundColor": {"red": 1, "green": 1, "blue": 1}
+                        }
+                    },
+                    "fields": "userEnteredFormat.backgroundColor"
+                }
+            }
+        ]
+        body = {"requests": requests}
+        sheets_service.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body=body).execute()
+        return True
+    except Exception as e:
+        st.warning(f"Gagal menghapus highlight: {e}")
+        return False
+
 # =========================
 # SESSION STATE & RESET LOGIC
 # =========================
@@ -224,6 +272,17 @@ if st.session_state.submitted:
 # =========================
 with main:
     st.title("Form P2H Unit")
+
+    # tombol opsional untuk clear highlight (HATI-HATI: ini akan menghapus warna lama)
+    col_btn1, col_btn2 = st.columns([1, 5])
+    with col_btn1:
+        if st.button("Clear all highlights"):
+            ok_clear = clear_all_highlights("Sheet1")
+            if ok_clear:
+                st.success("Semua highlight berhasil dihapus.")
+            else:
+                st.warning("Gagal menghapus highlight.")
+
     col1, col2, col3 = st.columns(3)
     with col1:
         tanggal = st.date_input("Tanggal")
@@ -318,6 +377,7 @@ with main:
         progress_text = st.empty()
         uploaded_count = 0
         all_ok = True
+        oli_ok = False  # flag: apakah oli mesin berhasil diappend
 
         # gunakan spinner selama proses berjalan
         with st.spinner("Sedang mengupload foto dan menyimpan ke Google Sheet..."):
@@ -387,35 +447,67 @@ with main:
                 ok = append_to_sheet_row(row_values)
                 if not ok:
                     all_ok = False
+                else:
+                    # if this was 'Oli mesin' and append succeeded -> mark so we highlight later
+                    if item == ITEMS[0]:
+                        oli_ok = True
 
-                # jika append sukses dan item == 'Oli mesin' (ITEMS[0]), highlight baris start_count
-                if ok and item == ITEMS[0]:
-                    # the row we just added is at zero-based index = start_count
-                    highlight_row_by_index(start_count, color=(1.0, 1.0, 0.88), sheet_name="Sheet1")
-
-                # increment start_count after every successful append because the next appended row index increases
-                if ok:
+                    # increment start_count because one row was added successfully
                     start_count += 1
 
         # pastikan progress 100% kalau semua upload selesai
         progress_bar.progress(100)
         progress_text.markdown(f"Progress: **100%** ({uploaded_count}/{total_uploads} file)")
 
+        # Setelah loop selesai: jika oli_ok maka highlight the first appended row (index = start_count_before)
+        if oli_ok:
+            # the Oli mesin row index = original_start_count (we recorded earlier) 
+            # but we incremented start_count as we appended; so compute original:
+            # original_start_count = start_count - number_of_successful_appends
+            # Simpler: we stored initial start as variable start_count_init above -> but we overwrote.
+            # To keep it simple: recompute the last row count and find the latest 'Oli mesin' row by scanning column 'Item' for 'Oli mesin' in last N rows.
+            # Simpler approach implemented below: find last occurrence of 'Oli mesin' by reading column D (Item).
+            try:
+                resp = sheets_service.spreadsheets().values().get(
+                    spreadsheetId=SHEET_ID,
+                    range="Sheet1!D:D"
+                ).execute()
+                items_col = resp.get("values", [])
+                # find last index where value == 'Oli mesin'
+                last_idx = None
+                for i, row in enumerate(items_col):
+                    if len(row) > 0 and row[0] == ITEMS[0]:
+                        last_idx = i  # zero-based index of that row
+                if last_idx is not None:
+                    highlight_row_by_index(last_idx, color=(1.0, 1.0, 0.88), sheet_name="Sheet1")
+            except Exception:
+                # non-fatal
+                pass
+
         # Setelah semua selesai: tampilkan halaman sukses langsung dan siapkan reset sekali klik
         if all_ok:
             # set submitted flag first
             st.session_state.submitted = True
 
-            # TRY: langsung tampilkan sukses di tempat yang jelas — kosongkan container dan render success
-            # lalu stop script agar form tidak muncul lagi pada run ini.
+            # kosongkan container (menghapus form UI dari page)
             main.empty()
-            st.success("✅ Data berhasil disimpan ke Google Sheet!")
-            if st.button("➕ Isi Form Baru"):
-                st.session_state.reset = True
+
+            # coba reload client dengan JS (lebih andal untuk memaksa re-render di browser)
+            try:
+                components.html("""<script>window.location.reload();</script>""", height=0)
+            except Exception:
+                # fallback ke experimental_rerun
                 try:
                     st.experimental_rerun()
                 except Exception:
-                    st.info("Jika halaman belum berubah otomatis, silakan refresh halaman.")
-            st.stop()
+                    # fallback final: tampilkan success langsung
+                    st.success("✅ Data berhasil disimpan ke Google Sheet!")
+                    if st.button("➕ Isi Form Baru"):
+                        st.session_state.reset = True
+                        try:
+                            st.experimental_rerun()
+                        except Exception:
+                            st.info("Jika halaman belum berubah otomatis, silakan refresh halaman.")
+                    st.stop()
         else:
             st.error("Proses selesai dengan beberapa peringatan (cek warning). Periksa konfigurasi API/akses dan ulangi jika perlu.")
